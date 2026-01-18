@@ -77,12 +77,10 @@ class AgentService:
             
             source_docs = self.retriever._get_relevant_documents(question)
             sources = self._format_source_documents(source_docs)
-            confidence = self._calculate_confidence_from_docs(source_docs)
             
             return {
                 "answer": answer,
                 "sources": sources,
-                "confidence": confidence,
                 "user_info_used": user_info_used,
                 "session_id": session_id
             }
@@ -93,7 +91,7 @@ class AgentService:
                 "sources": [],
                 "error": str(e)
             }
-    
+
     def stream_answer(
         self, 
         question: str, 
@@ -128,8 +126,7 @@ class AgentService:
         sources = []
         for doc in source_docs:
             content = doc.page_content
-            truncated_content = content[:500] + "..." if len(content) > 500 else content
-            
+            truncated_content = content[:500] + "..." if len(content) > 500 else content       
             sources.append({
                 "id": doc.metadata.get('id', ''),
                 "content": truncated_content,
@@ -139,18 +136,6 @@ class AgentService:
                 "score": doc.metadata.get('score', 0.0)
             })
         return sources
-    
-    def _calculate_confidence_from_docs(self, source_docs: List[Document]) -> Optional[float]:
-        """Calculate confidence score from top source documents."""
-        if not source_docs:
-            return 0.0
-        
-        top_score = source_docs[0].metadata.get('score', 0.0)
-        if top_score == 0.0:
-            return 0.0
-        if top_score > 1.0:
-            top_score = top_score / 100.0
-        return min(1.0, max(0.0, top_score))
     
     def clear_conversation(self, session_id: str) -> bool:
         """Clear conversation history for a specific session."""
