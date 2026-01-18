@@ -403,22 +403,6 @@ Includes:
    - Check Azure AI Projects package is installed
    - Ensure Azure credentials have proper permissions
 
-## 📄 License
-
-MIT License
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
-
-## 📞 Support
-
-For issues and questions, please open an issue on the repository.
-
 ---
 
 **Built with ❤️ using FastAPI, Azure AI Services, and LangChain**
