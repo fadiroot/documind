@@ -124,13 +124,8 @@ Instructions:
                     
                     final_response = chain_ref.llm.invoke([HumanMessage(content=final_prompt)])
                     answer = chain_ref._extract_content(final_response)
-                    
-                    chain_ref.conversation_memory.save_message(thread_id, "user", question, session_id)
-                    chain_ref.conversation_memory.save_message(thread_id, "assistant", answer, session_id)
-                    
-                    return {"answer": answer, "user_info_used": user_info_used}
-                
-                answer = chain_ref._extract_content(response)
+                else:
+                    answer = chain_ref._extract_content(response)
                 
                 chain_ref.conversation_memory.save_message(thread_id, "user", question, session_id)
                 chain_ref.conversation_memory.save_message(thread_id, "assistant", answer, session_id)
