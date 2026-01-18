@@ -1,5 +1,5 @@
 """Agent service using LangChain RAG chains with LCEL and tools."""
-from typing import List, Dict, Any, Optional, Iterator
+from typing import List, Dict, Any, Optional
 
 from langchain_openai import AzureChatOpenAI
 from langchain_core.documents import Document
@@ -92,35 +92,6 @@ class AgentService:
                 "error": str(e)
             }
 
-    def stream_answer(
-        self, 
-        question: str, 
-        category: Optional[str] = None,
-        user_metadata: Optional[UserMetadata] = None,
-        session_id: Optional[str] = None
-    ) -> Iterator[str]:
-        """Stream answer tokens as they're generated."""
-        if not self.agent_chain or not self.agent_chain.tools_chain:
-            yield "Service not properly initialized."
-            return
-        
-        try:
-            self.agent_chain.set_user_metadata(user_metadata)
-            
-            chain_input = {"input": question, "session_id": session_id}
-            if category:
-                chain_input["input"] = f"[Category: {category}] {question}"
-            
-            result = self.agent_chain.invoke(chain_input)
-            answer = result.get("answer", "") if isinstance(result, dict) else str(result)
-            words = answer.split()
-            
-            for i, word in enumerate(words):
-                yield word + (" " if i < len(words) - 1 else "")
-        except Exception as e:
-            logger.error(f"Error streaming answer: {str(e)}")
-            yield f"Error: {str(e)}"
-    
     def _format_source_documents(self, source_docs: List[Document]) -> List[Dict[str, Any]]:
         """Format LangChain documents to source format."""
         sources = []
