@@ -72,12 +72,6 @@ DocuMind/
 │   ├── ingest_docs.py              # Single document ingestion
 │   └── rebuild_index.py            # Index rebuild utility
 │
-├── tests/                        # Test suite
-│   ├── test_embedding_service.py
-│   ├── test_pdf_service.py
-│   ├── test_retrieval_service.py
-│   └── test_vectorstore_service.py
-│
 ├── documents/                    # Sample documents (PDFs)
 ├── Dockerfile                    # Docker container definition
 ├── docker-compose.yml            # Docker Compose configuration
@@ -321,19 +315,6 @@ Services are organized by domain for better maintainability:
 - Language-matched responses
 - Supports Arabic documents and questions
 - RTL text handling
-
-## 🧪 Testing
-
-```bash
-# Run all tests
-pytest tests/
-
-# Run specific test file
-pytest tests/test_retrieval_service.py
-
-# Run with coverage
-pytest --cov=core tests/
-```
 
 ## 📦 Dependencies
 
