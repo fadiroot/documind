@@ -63,8 +63,6 @@ class AgentService:
             self.agent_chain.set_user_metadata(user_metadata)
             
             chain_input = {"input": question, "session_id": session_id}
-            if category:
-                chain_input["input"] = f"[Category: {category}] {question}"
             
             result = self.agent_chain.invoke(chain_input)
             
@@ -97,10 +95,9 @@ class AgentService:
         sources = []
         for doc in source_docs:
             content = doc.page_content
-            truncated_content = content[:500] + "..." if len(content) > 500 else content       
             sources.append({
                 "id": doc.metadata.get('id', ''),
-                "content": truncated_content,
+                "content": content,
                 "document_name": doc.metadata.get('document_name', 'Unknown'),
                 "page_number": doc.metadata.get('page_number'),
                 "chunk_index": doc.metadata.get('chunk_index'),

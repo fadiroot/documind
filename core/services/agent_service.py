@@ -167,11 +167,10 @@ class AgentService:
         sources = []
         for doc in source_docs:
             content = doc.page_content
-            truncated_content = content[:500] + "..." if len(content) > 500 else content
             
             sources.append({
                 "id": doc.metadata.get('id', ''),
-                "content": truncated_content,
+                "content": content,
                 "document_name": doc.metadata.get('document_name', 'Unknown'),
                 "page_number": doc.metadata.get('page_number'),
                 "chunk_index": doc.metadata.get('chunk_index'),

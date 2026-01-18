@@ -32,31 +32,26 @@ class AgentChain:
         """Set the current user metadata for tool access."""
         self.current_user_metadata = user_metadata
     
-    def _build_tool_instruction(self) -> str:
-        """Build tool usage instructions."""
-        return """
-Available tool:
-- get_user_info: Use ONLY for questions about the LOGGED-IN USER'S actual account/profile.
-  DO NOT use for follow-up questions referencing scenarios from conversation history.
-"""
-    
-    def _build_base_prompt(
+    def _build_prompt(
         self, 
         context: str, 
         chat_history: str, 
         question: str, 
         response_language: str,
-        tool_instruction: str = ""
+        tool_results: Optional[list[str]] = None
     ) -> str:
-        """Build the main prompt with all context."""
-        return f"""You are a helpful AI assistant that answers questions based on retrieved documents.{tool_instruction}
+        """Build the prompt with all context and optional tool results."""
+        tool_section = ""
+        if tool_results:
+            tool_section = f"\n\nTool Results:\n{chr(10).join(tool_results)}\n"
+        
+        return f"""You are a helpful AI assistant that answers questions based on retrieved documents.
 
 Document Context:
 {context}
 
 Conversation History:
-{chat_history}
-
+{chat_history}{tool_section}
 Question: {question}
 
 Instructions:
@@ -64,31 +59,6 @@ Instructions:
 2. If this is a follow-up question, use the scenario from the previous conversation.
 3. Format your answer with clear headings, bullet points, and proper spacing.
 4. RESPOND ENTIRELY IN {response_language.upper()} - match the question's language exactly."""
-    
-    def _build_final_prompt(
-        self,
-        context: str,
-        chat_history: str,
-        question: str,
-        tool_results: list[str],
-        response_language: str
-    ) -> str:
-        """Build the final prompt after tool execution."""
-        return f"""Based on the following information, provide a well-organized answer.
-
-Document Context: {context}
-
-Conversation History: {chat_history}
-
-Tool Results:
-{chr(10).join(tool_results)}
-
-Question: {question}
-
-IMPORTANT: If this question references a scenario from conversation history, answer based on THAT scenario, not the logged-in user's profile.
-
-Format your answer clearly with headings, bullet points, and proper spacing.
-RESPOND ENTIRELY IN {response_language.upper()}."""
     
     def _setup_chain(self):
         """Set up LangChain RAG chain with tools using LCEL."""
@@ -120,14 +90,11 @@ RESPOND ENTIRELY IN {response_language.upper()}."""
                     user_info_tool = create_user_info_tool(chain_ref.current_user_metadata)
                     llm_with_tools = chain_ref.llm.bind_tools([user_info_tool])
                 
-                tool_instruction = chain_ref._build_tool_instruction() if user_info_tool else ""
-                
-                prompt_text = chain_ref._build_base_prompt(
+                prompt_text = chain_ref._build_prompt(
                     context=context,
                     chat_history=chat_history,
                     question=question,
-                    response_language=response_language,
-                    tool_instruction=tool_instruction
+                    response_language=response_language
                 )
                 
                 messages = [HumanMessage(content=prompt_text)]
@@ -144,12 +111,12 @@ RESPOND ENTIRELY IN {response_language.upper()}."""
                             tool_results.append(f"User Info: {result}")
                             user_info_used = True
                     
-                    final_prompt = chain_ref._build_final_prompt(
+                    final_prompt = chain_ref._build_prompt(
                         context=context,
                         chat_history=chat_history,
                         question=question,
-                        tool_results=tool_results,
-                        response_language=response_language
+                        response_language=response_language,
+                        tool_results=tool_results
                     )
                     
                     if not chain_ref.llm:
