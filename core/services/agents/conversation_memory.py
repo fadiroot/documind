@@ -23,94 +23,104 @@ class ConversationMemory:
         self.azure_project_client: Optional[Any] = None
         self.azure_agent_id: Optional[str] = None
         self.session_thread_map: Dict[str, str] = {}
+        self.in_memory_history: Dict[str, list[Dict[str, str]]] = {}
         
         if AZURE_AI_PROJECTS_AVAILABLE and settings.AZURE_PROJECT_ENDPOINT and settings.AZURE_AI_AGENT_ID:
             try:
-                self.azure_project_client = AIProjectClient(
-                    credential=DefaultAzureCredential(),  # type: ignore
+                credential = DefaultAzureCredential()  # type: ignore
+                self.azure_project_client = AIProjectClient(  # type: ignore
+                    credential=credential,
                     endpoint=settings.AZURE_PROJECT_ENDPOINT
-                )  # type: ignore
+                )
                 self.azure_agent_id = settings.AZURE_AI_AGENT_ID
-                logger.info(f"Azure AI Agents initialized with agent ID: {self.azure_agent_id}")
             except Exception as e:
-                logger.warning(f"Failed to initialize Azure AI Agents: {str(e)}")
+                logger.warning(f"Failed to initialize Azure AI Agents: {str(e)}. Thread management disabled. Using in-memory fallback.")
                 self.azure_project_client = None
-        else:
-            if not AZURE_AI_PROJECTS_AVAILABLE:
-                logger.warning("Azure AI Projects package not available")
-            else:
-                logger.warning("Azure AI Agents not configured (AZURE_PROJECT_ENDPOINT or AZURE_AI_AGENT_ID missing)")
-    
+        elif not AZURE_AI_PROJECTS_AVAILABLE:
+            logger.warning("Azure AI Projects package not available")
+      
     def get_or_create_thread(self, session_id: Optional[str]) -> Optional[str]:
         """Get or create Azure AI Agents thread for a session."""
         if not session_id or not self.azure_project_client or not self.azure_agent_id:
+            logger.info(f"[THREAD] Session {session_id}: No Azure thread (fallback to in-memory)")
             return None
         
         try:
-            # Check if thread already exists for this session
             if session_id in self.session_thread_map:
-                return self.session_thread_map[session_id]
+                thread_id = self.session_thread_map[session_id]
+                logger.info(f"[THREAD] Session {session_id}: Using existing thread {thread_id}")
+                return thread_id
             
-            # Create new thread
             thread = self.azure_project_client.agents.threads.create()
             self.session_thread_map[session_id] = thread.id
-            logger.info(f"Created new Azure thread {thread.id} for session {session_id}")
+            logger.info(f"[THREAD] Session {session_id}: Created new thread {thread.id}")
             return thread.id
         except Exception as e:
-            logger.error(f"Error creating/getting Azure thread: {str(e)}")
+            error_msg = str(e)
+            if "expired" not in error_msg.lower() and "AADSTS7000222" not in error_msg and "authentication failed" not in error_msg.lower():
+                logger.error(f"Error creating/getting Azure thread: {error_msg}")
             return None
     
-    def get_chat_history(self, thread_id: Optional[str]) -> str:
-        """Get chat history from Azure AI Agents thread."""
-        if not thread_id or not self.azure_project_client:
-            return "No previous conversation history."
+    def get_chat_history(self, thread_id: Optional[str], session_id: Optional[str] = None) -> str:
+        """Get chat history from Azure AI Agents thread, falls back to in-memory history."""
+        history_parts = []
         
-        try:
-            messages = self.azure_project_client.agents.messages.list(
-                thread_id=thread_id,
-                order=ListSortOrder.ASCENDING # type: ignore
-            )
-            
-            history_parts = []
-            for message in list(messages)[-10:]:  # Keep last 10 messages (5 turns)
-                if message.text_messages:
-                    role = message.role
-                    text = message.text_messages[-1].text.value
-                    history_parts.append(f"{role.capitalize()}: {text}")
-            
-            return "\n".join(history_parts) if history_parts else "No previous conversation history."
-        except Exception as e:
-            logger.error(f"Error retrieving chat history from thread: {str(e)}")
-            return "No previous conversation history."
+        if thread_id and self.azure_project_client and ListSortOrder:
+            try:
+                messages = self.azure_project_client.agents.messages.list(
+                    thread_id=thread_id,
+                    order=ListSortOrder.ASCENDING
+                )
+                for message in list(messages)[-10:]:
+                    if message.text_messages:
+                        role = message.role
+                        text = message.text_messages[-1].text.value
+                        prefix = "السؤال السابق" if role == "user" else "الإجابة السابقة"
+                        history_parts.append(f"{prefix}: {text}")
+            except Exception as e:
+                logger.error(f"Error retrieving chat history: {str(e)}")
+        
+        if not history_parts and session_id and session_id in self.in_memory_history:
+            for msg in self.in_memory_history[session_id][-10:]:
+                role = msg.get("role", "")
+                text = msg.get("content", "")
+                prefix = "السؤال السابق" if role == "user" else "الإجابة السابقة"
+                history_parts.append(f"{prefix}: {text}")
+        
+        if history_parts:
+            formatted_history = "\n".join(history_parts)
+            return f"{formatted_history}\n\nاستخدم هذا السياق لفهم الإشارات في السؤال الحالي."
+        
+        return "No previous conversation history."
     
-    def save_message(self, thread_id: Optional[str], role: str, content: str) -> bool:
-        """Save a message to Azure AI Agents thread."""
-        if not thread_id or not self.azure_project_client:
-            return False
+    def save_message(self, thread_id: Optional[str], role: str, content: str, session_id: Optional[str] = None) -> bool:
+        """Save message to Azure thread, falls back to in-memory storage."""
+        if thread_id and self.azure_project_client:
+            try:
+                self.azure_project_client.agents.messages.create(
+                    thread_id=thread_id,
+                    role=role,
+                    content=content
+                )
+            except Exception as e:
+                logger.error(f"Error saving message to thread: {str(e)}")
         
-        try:
-            self.azure_project_client.agents.messages.create(
-                thread_id=thread_id,
-                role=role,
-                content=content
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Error saving message to thread: {str(e)}")
-            return False
+        if session_id:
+            if session_id not in self.in_memory_history:
+                self.in_memory_history[session_id] = []
+            self.in_memory_history[session_id].append({"role": role, "content": content})
+            if len(self.in_memory_history[session_id]) > 20:
+                self.in_memory_history[session_id] = self.in_memory_history[session_id][-20:]
+        
+        return True
     
     def clear_session(self, session_id: str) -> bool:
-        """
-        Clear conversation history for a specific session by removing thread mapping.
-        
-        Args:
-            session_id: Session ID to clear
-        
-        Returns:
-            True if session was cleared, False if session didn't exist
-        """
+        """Clear conversation history for a session."""
+        cleared = False
         if session_id in self.session_thread_map:
             del self.session_thread_map[session_id]
-            logger.info(f"Cleared conversation thread mapping for session: {session_id}")
-            return True
-        return False
+            cleared = True
+        if session_id in self.in_memory_history:
+            del self.in_memory_history[session_id]
+            cleared = True
+        return cleared

@@ -68,6 +68,8 @@ class VectorStoreService:
                 "select": ["id", "content", "document_name", "page_number", "chunk_index"]
             }
             
+            # Ensure @search.score is included in results for confidence calculation
+            
             if filters:
                 search_params["filter"] = filters
             

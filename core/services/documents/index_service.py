@@ -12,6 +12,7 @@ from azure.search.documents.indexes.models import (
     HnswAlgorithmConfiguration,
     VectorSearchAlgorithmKind,
     HnswParameters,
+    SemanticSearch,
     SemanticConfiguration,
     SemanticPrioritizedFields,
     SemanticField
@@ -152,7 +153,9 @@ class IndexService:
                 name=self.index_name,
                 fields=fields,
                 vector_search=vector_search,
-                semantic_configurations=[semantic_config]
+                semantic_search=SemanticSearch(
+                    configurations=[semantic_config]
+                )
             )
             
             self.index_client.create_or_update_index(index)

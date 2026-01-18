@@ -1,4 +1,5 @@
 """Q&A endpoints using LangChain RAG chains."""
+from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from core.models.question import QuestionRequest, QuestionResponse
@@ -16,25 +17,19 @@ agent_service = AgentService()
 @router.post("/ask", response_model=APIResponse)
 async def ask_question(
     request: QuestionRequest,
+    session_id: Optional[str] = None,
     current_user: UserMetadata = Depends(get_current_user)
 ):
-    """
-    Ask a question and get an answer using LangChain RAG chains.
-    
-    Args:
-        request: Question request with question text, optional context, and category
-        current_user: Current authenticated user (from JWT token)
-    
-    Returns:
-        API response with answer, sources, and confidence
-    """
+    """Ask a question and get an answer using LangChain RAG chains."""
     try:
-        # Use user metadata for context-aware filtering
+        effective_session_id = session_id or current_user.user_id
+        
         result = agent_service.answer_question(
             question=request.question,
             context=request.context_ids,
             category=request.category,
-            user_metadata=current_user
+            user_metadata=current_user,
+            session_id=effective_session_id
         )
         
         response = QuestionResponse(
@@ -62,16 +57,7 @@ async def ask_question_stream(
     request: QuestionRequest,
     current_user: UserMetadata = Depends(get_current_user)
 ):
-    """
-    Ask a question with streaming response.
-    
-    Args:
-        request: Question request with optional category
-        current_user: Current authenticated user (from JWT token)
-    
-    Returns:
-        Streaming response with answer chunks
-    """
+    """Ask a question with streaming response."""
     try:
         def generate():
             for chunk in agent_service.stream_answer(
@@ -79,7 +65,6 @@ async def ask_question_stream(
                 category=request.category,
                 user_metadata=current_user
             ):
-                # Format as SSE (Server-Sent Events)
                 yield f"data: {json.dumps({'chunk': chunk})}\n\n"
             yield "data: [DONE]\n\n"
         
