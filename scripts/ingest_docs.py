@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.services.documents.pdf_service import PDFService
 from core.services.retrieval.embedding_service import EmbeddingService
-from core.services.retrieval.vectorstore_service import VectorStoreService
+from core.services.indexing.storage_service import StorageService
 from core.utils.logger import logger
 
 
@@ -25,7 +25,7 @@ def ingest_document(file_path: str):
     
     pdf_service = PDFService()
     embedding_service = EmbeddingService()
-    vectorstore_service = VectorStoreService()
+    storage_service = StorageService()
     
     try:
         # Read PDF
@@ -63,7 +63,7 @@ def ingest_document(file_path: str):
                 documents.append(doc)
         
         # Upload
-        success = vectorstore_service.upload_documents(documents)
+        success = storage_service.upload_documents(documents)
         
         if success:
             logger.info(f"Successfully ingested {len(documents)} chunks from {file_path}")

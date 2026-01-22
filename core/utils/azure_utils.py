@@ -19,15 +19,29 @@ def get_search_client() -> Optional[SearchClient]:
     
     if not endpoint or not api_key:
         logger.warning("Azure AI Search credentials not configured")
+        logger.warning(f"  Endpoint: {endpoint or 'NOT SET'}")
+        logger.warning(f"  API Key: {'SET' if api_key else 'NOT SET'}")
+        logger.warning(f"  Index Name: {index_name or 'NOT SET'}")
         return None
     
-    credential = AzureKeyCredential(api_key)
-    client = SearchClient(
-        endpoint=endpoint,
-        index_name=index_name,
-        credential=credential
-    )
-    return client
+    # Validate endpoint format
+    if not endpoint.startswith(('https://', 'http://')):
+        logger.error(f"Invalid Azure AI Search endpoint format: {endpoint}")
+        logger.error("Endpoint should start with https:// or http://")
+        return None
+    
+    try:
+        credential = AzureKeyCredential(api_key)
+        client = SearchClient(
+            endpoint=endpoint,
+            index_name=index_name,
+            credential=credential
+        )
+        logger.debug(f"Azure AI Search client initialized for endpoint: {endpoint}, index: {index_name}")
+        return client
+    except Exception as e:
+        logger.error(f"Failed to create Azure AI Search client: {str(e)}")
+        return None
 
 
 def get_document_intelligence_client():

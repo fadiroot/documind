@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.services.documents.pdf_service import PDFService
 from core.services.retrieval.embedding_service import EmbeddingService
-from core.services.retrieval.vectorstore_service import VectorStoreService
+from core.services.indexing.storage_service import StorageService
 from core.utils.logger import logger
 
 
@@ -21,7 +21,7 @@ def process_pdf_file(
     file_path: Path,
     pdf_service: PDFService,
     embedding_service: EmbeddingService,
-    vectorstore_service: VectorStoreService,
+    storage_service: StorageService,
     skip_existing: bool = False
 ) -> Dict[str, Any]:
     """
@@ -31,7 +31,7 @@ def process_pdf_file(
         file_path: Path to PDF file
         pdf_service: PDF service instance
         embedding_service: Embedding service instance
-        vectorstore_service: Vector store service instance
+        storage_service: Storage service instance for uploading documents
         skip_existing: Whether to skip files that already exist in index
     
     Returns:
@@ -51,21 +51,23 @@ def process_pdf_file(
         with open(file_path, 'rb') as f:
             pdf_bytes = f.read()
         
-        # Extract and chunk text
-        logger.info(f"  Extracting text and chunking...")
-        chunks = pdf_service.chunk_pdf(pdf_bytes)
+        # Extract and chunk text with flexible metadata
+        filename = file_path.name
+        document_chunks = pdf_service.chunk_pdf_with_metadata(pdf_bytes, filename=filename)
         
-        if not chunks:
+        if not document_chunks:
             result["error"] = "No text extracted from PDF"
             logger.warning(f"  ⚠️  {result['error']}")
             return result
         
-        result["chunks_processed"] = len(chunks)
-        logger.info(f"  ✓ Extracted {len(chunks)} chunks")
+        result["chunks_processed"] = len(document_chunks)
+        logger.info(f"  ✓ {len(document_chunks)} chunks extracted")
+        
+        # Extract content for embeddings
+        chunk_contents = [chunk.content for chunk in document_chunks]
         
         # Create embeddings
-        logger.info(f"  Creating embeddings...")
-        embeddings = embedding_service.create_embeddings(chunks)
+        embeddings = embedding_service.create_embeddings(chunk_contents)
         
         # Count successful embeddings
         valid_embeddings = sum(1 for emb in embeddings if emb is not None)
@@ -74,40 +76,127 @@ def process_pdf_file(
             logger.error(f"  ✗ {result['error']}")
             return result
         
-        logger.info(f"  ✓ Created {valid_embeddings}/{len(chunks)} embeddings")
+        logger.info(f"  ✓ {valid_embeddings} embeddings created")
         
-        # Prepare documents for vector store
+        # Prepare documents for vector store with flexible metadata
         document_id = str(uuid.uuid4())
-        filename = file_path.name
         documents = []
+        chunk_counter = 0
         
-        for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+        for idx, (doc_chunk, embedding) in enumerate(zip(document_chunks, embeddings)):
             if embedding:  # Only include if embedding was created
-                # Approximate token count (rough estimate: ~4 chars per token)
-                token_count = len(chunk.split())
+                chunk_counter += 1
+                # Build section title from available metadata
+                section_title_parts = []
+                if doc_chunk.item_title:
+                    section_title_parts.append(doc_chunk.item_title)
+                section_title = " - ".join(section_title_parts) if section_title_parts else doc_chunk.section_title
                 
+                # Approximate token count
+                token_count = len(doc_chunk.content.split())
+                
+                # Get resource path from chunk metadata (now built in chunker with full hierarchy)
+                resource_path = doc_chunk.metadata.get('resource_path')
+                if not resource_path:
+                    # Fallback: build basic path if not available
+                    resource_path = filename.replace('.pdf', '')
+                    if doc_chunk.article_reference:
+                        resource_path = f"{resource_path} > {doc_chunk.article_reference}"
+                
+                # Build document dictionary with all fields
+                # Filter out None values to avoid Azure Search issues
                 doc = {
                     "id": f"{document_id}_{idx}",
-                    "content": chunk,
+                    "content": doc_chunk.content,
                     "contentVector": embedding,
+                    # Required index fields
+                    "source_document": filename,
+                    # Metadata fields
+                    "metadata_section_title": section_title,
+                    "metadata_resource_path": resource_path,
+                    # Legacy fields for backward compatibility
                     "document_name": filename,
-                    "page_number": 1,
-                    "chunk_index": idx,
-                    "token_count": token_count
+                    "page_number": doc_chunk.page_number or 1,
+                    "chunk_index": doc_chunk.chunk_index or idx,
+                    "token_count": token_count,
                 }
-                documents.append(doc)
+                
+                # Add optional fields only if they have values (to avoid None issues)
+                # Legal hierarchy (now properly tracked by hierarchy context in chunker)
+                if doc_chunk.legal_part_name:
+                    doc["legal_part_name"] = doc_chunk.legal_part_name
+                if doc_chunk.legal_chapter_name:
+                    doc["legal_chapter_name"] = doc_chunk.legal_chapter_name
+                
+                # Article reference (now in Arabic) and number
+                if doc_chunk.article_reference:
+                    doc["article_reference"] = doc_chunk.article_reference
+                if doc_chunk.item_number and doc_chunk.item_type == "article":
+                    doc["article_number"] = doc_chunk.item_number
+                
+                # Classification fields
+                if doc_chunk.category:
+                    doc["category"] = doc_chunk.category
+                if doc_chunk.target_audience:
+                    doc["target_audience"] = doc_chunk.target_audience
+                
+                # Keywords extracted using KeyBERT
+                if doc_chunk.keywords:
+                    doc["keywords"] = doc_chunk.keywords
+                
+                # Document metadata
+                if doc_chunk.document_title:
+                    doc["document_title"] = doc_chunk.document_title
+                
+                # Hierarchical structure metadata
+                if doc_chunk.item_number:
+                    doc["metadata_item_number"] = doc_chunk.item_number
+                if doc_chunk.item_type:
+                    doc["metadata_item_type"] = doc_chunk.item_type
+                if doc_chunk.item_title:
+                    doc["metadata_item_title"] = doc_chunk.item_title
+                
+                # Additional metadata from metadata dict
+                for k, v in doc_chunk.metadata.items():
+                    if v:  # Only include non-empty values
+                        # Map common metadata keys to index fields
+                        if k == "paragraph_number":
+                            doc["paragraph_number"] = v
+                        elif k == "clause_number":
+                            doc["clause_number"] = v
+                        elif k == "procedure_name":
+                            doc["procedure_name"] = v
+                        elif k == "procedure_step":
+                            doc["procedure_step"] = v
+                        elif k == "policy_name":
+                            doc["policy_name"] = v
+                        elif k == "annex_name":
+                            doc["annex_name"] = v
+                        elif k == "rank":
+                            doc["rank"] = v
+                        elif k == "grade":
+                            doc["grade"] = v
+                        elif k == "category_class":
+                            doc["category_class"] = v
+                        elif k == "group":
+                            doc["group"] = v
+                        elif k == "cadre_classification":
+                            doc["cadre_classification"] = v
+                
+                # Final cleanup: Remove all None/null values to keep index clean
+                doc_clean = {k: v for k, v in doc.items() if v is not None and v != "" and v != []}
+                documents.append(doc_clean)
         
-        # Upload to vector store
-        logger.info(f"  Uploading {len(documents)} documents to index...")
-        success = vectorstore_service.upload_documents(documents)
+        # Upload to search index
+        success = storage_service.upload_documents(documents)
         
         if success:
             result["success"] = True
             result["chunks_uploaded"] = len(documents)
-            logger.info(f"  ✓ Successfully uploaded {len(documents)} chunks")
+            logger.info(f"  ✓ {len(documents)} chunks uploaded")
         else:
-            result["error"] = "Failed to upload documents to vector store"
-            logger.error(f"  ✗ {result['error']}")
+            result["error"] = "Failed to upload"
+            logger.error(f"  ✗ Upload failed")
         
         return result
         
@@ -161,13 +250,12 @@ def batch_process_folder(
             "results": []
         }
     
-    logger.info(f"Found {len(pdf_files)} PDF file(s) to process")
-    logger.info("=" * 60)
+    logger.info(f"Found {len(pdf_files)} PDF file(s) to process\n")
     
     # Initialize services
     pdf_service = PDFService()
     embedding_service = EmbeddingService()
-    vectorstore_service = VectorStoreService()
+    storage_service = StorageService()
     
     # Process each file
     results = []
@@ -176,14 +264,13 @@ def batch_process_folder(
     total_chunks = 0
     
     for idx, pdf_file in enumerate(pdf_files, 1):
-        logger.info(f"\n[{idx}/{len(pdf_files)}] Processing: {pdf_file.name}")
-        logger.info("-" * 60)
+        logger.info(f"[{idx}/{len(pdf_files)}] {pdf_file.name}")
         
         result = process_pdf_file(
             pdf_file,
             pdf_service,
             embedding_service,
-            vectorstore_service,
+            storage_service,
             skip_existing
         )
         
@@ -196,14 +283,11 @@ def batch_process_folder(
             failed += 1
     
     # Summary
-    logger.info("\n" + "=" * 60)
-    logger.info("BATCH PROCESSING SUMMARY")
-    logger.info("=" * 60)
-    logger.info(f"Total files found:     {len(pdf_files)}")
-    logger.info(f"Successfully processed: {successful}")
-    logger.info(f"Failed:                {failed}")
-    logger.info(f"Total chunks uploaded: {total_chunks}")
-    logger.info("=" * 60)
+    logger.info(f"\n{'='*60}")
+    logger.info(f"✓ Processed: {successful}/{len(pdf_files)} files | {total_chunks} chunks")
+    if failed > 0:
+        logger.warning(f"✗ Failed: {failed} files")
+    logger.info(f"{'='*60}")
     
     return {
         "success": True,

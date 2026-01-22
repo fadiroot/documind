@@ -15,7 +15,7 @@ def rebuild_index():
     logger.info("Starting index rebuild...")
     logger.info(f"Target index: {settings.AZURE_SEARCH_INDEX_NAME}")
     
-    from core.services.documents.index_service import IndexService
+    from core.services.indexing.index_service import IndexService
     index_service = IndexService()
     
     if index_service.index_exists():

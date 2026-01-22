@@ -1,45 +1,53 @@
-"""Services package - organized by domain."""
-# Agent services
-from core.services.agents import (
-    AgentService,
-    AgentChain,
-    AzureAISearchRetriever,
-    ConversationMemory,
-    create_user_info_tool,
-)
+"""Core services package - production-ready, organized by domain.
 
-# Retrieval services
-from core.services.retrieval import (
-    RetrievalService,
-    EmbeddingService,
-    VectorStoreService,
-)
+Main Services:
+- AgentService: Question answering with RAG
+- PDFService: Document processing and chunking
+- IndexService: Azure AI Search index management
+- StorageService: Document indexing and storage
+- auth_service: Authentication and authorization
+
+Usage:
+    from core.services import AgentService, PDFService, IndexService
+
+    # For question answering
+    agent = AgentService()
+    result = agent.answer_question("What is...?")
+
+    # For document processing
+    pdf_service = PDFService()
+    chunks = pdf_service.chunk_pdf_with_metadata(pdf_bytes)
+
+    # For index management
+    index_service = IndexService()
+    index_service.create_index()
+"""
+# Agent services
+from core.services.agents import AgentService, create_user_info_tool
+
+# Retrieval services (internal use - not exported)
+from core.services.retrieval import EmbeddingService
+
+# Indexing services
+from core.services.indexing import IndexService, StorageService
 
 # Document services
-from core.services.documents import (
-    PDFService,
-    IndexService,
-)
+from core.services.documents import PDFService, DocumentChunker, DocumentChunk
 
 # Auth services
-from core.services.auth import (
-    auth_service,
-)
+from core.services.auth import auth_service
 
 __all__ = [
-    # Agents
+    # Main Services (Public API)
     "AgentService",
-    "AgentChain",
-    "AzureAISearchRetriever",
-    "ConversationMemory",
-    "create_user_info_tool",
-    # Retrieval
-    "RetrievalService",
-    "EmbeddingService",
-    "VectorStoreService",
-    # Documents
     "PDFService",
     "IndexService",
-    # Auth
+    "StorageService",
     "auth_service",
+    # Document Processing
+    "DocumentChunker",
+    "DocumentChunk",
+    # Utilities
+    "EmbeddingService",
+    "create_user_info_tool",
 ]

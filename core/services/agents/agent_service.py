@@ -1,22 +1,46 @@
-"""Agent service using LangChain RAG chains with LCEL and tools."""
-from typing import List, Dict, Any, Optional
+"""Main service for question answering using RAG (Retrieval-Augmented Generation)."""
+from typing import Dict, Any, Optional
 
 from langchain_openai import AzureChatOpenAI
-from langchain_core.documents import Document
 
 from core.services.retrieval.retrieval_service import RetrievalService
-from core.services.agents.azure_retriever import AzureAISearchRetriever
-from core.services.agents.conversation_memory import ConversationMemory
+from core.services.memory.conversation_memory import ConversationMemory
 from core.services.agents.agent_chain import AgentChain
+from core.services.prompts.prompt_builder import PromptBuilder
+from core.services.tools.tool_executor import ToolExecutor
 from core.models.user import UserMetadata
 from core.utils.logger import logger
 from app.config import settings
 
 
 class AgentService:
-    """Simple RAG service using LangChain RAG chains with tools for question answering."""
+    """
+    Main service for question answering with RAG and conversation management.
     
-    def __init__(self):
+    Coordinates document retrieval, LLM generation, and user-specific tools.
+    
+    Example:
+        ```python
+        agent = AgentService()
+        result = agent.answer_question(
+            question="ما هي الإجازات المتاحة؟",
+            user_metadata=user_metadata,
+            session_id="user_123"
+        )
+        print(result["answer"])
+        print(result["sources"])
+        ```
+    """
+    
+    def __init__(self, min_retrieval_score: float = 0.3):
+        """
+        Initialize the AgentService.
+        
+        Args:
+            min_retrieval_score: Minimum relevance score for retrieved documents (0.0-1.0).
+                                Lower values include more documents but may reduce quality.
+        """
+        # Initialize LLM
         if not settings.AZURE_OPENAI_API_KEY or not settings.AZURE_OPENAI_ENDPOINT:
             logger.warning("Azure OpenAI credentials not configured")
             self.llm = None
@@ -30,58 +54,91 @@ class AgentService:
                 streaming=True
             )
         
-        self.retrieval_service = RetrievalService()
-        self.retriever = AzureAISearchRetriever(self.retrieval_service, top_k=5)
-        self.conversation_memory = ConversationMemory()
+        # Initialize services
+        self.retrieval_service = RetrievalService(
+            min_score_threshold=min_retrieval_score,
+            enable_reranking=False  # Can be enabled later
+        )
+        self.conversation_memory = ConversationMemory(
+            max_recent_exchanges=3,
+            enable_summarization=False  # Can be enabled later
+        )
+        self.prompt_builder = PromptBuilder()
+        self.tool_executor = ToolExecutor(max_iterations=3)
+        
+        # Initialize agent chain
         self.agent_chain: Optional[AgentChain] = None
         if self.llm:
             self.agent_chain = AgentChain(
                 llm=self.llm,
-                retriever=self.retriever,
-                conversation_memory=self.conversation_memory
+                retrieval_service=self.retrieval_service,
+                conversation_memory=self.conversation_memory,
+                prompt_builder=self.prompt_builder,
+                tool_executor=self.tool_executor,
+                min_retrieval_score=min_retrieval_score
             )
-        
     
     def answer_question(
-        self, 
-        question: str, 
-        context: Optional[List[str]] = None,
-        category: Optional[str] = None,
+        self,
+        question: str,
         user_metadata: Optional[UserMetadata] = None,
-        session_id: Optional[str] = None
+        session_id: Optional[str] = None,
+        category: Optional[str] = None,  # Future: for filtering
     ) -> Dict[str, Any]:
-        """Answer a question using LangChain RAG chain with tools."""
+        """
+        Answer a question using RAG with document retrieval and LLM generation.
+        
+        Args:
+            question: User's question in Arabic or English
+            user_metadata: User metadata for personalized answers (optional)
+            session_id: Session ID for conversation history (optional)
+            category: Document category filter (reserved for future use)
+        
+        Returns:
+            Dictionary containing:
+                - answer (str): Generated answer with citations
+                - sources (List[Dict]): Source documents with metadata
+                - user_info_used (bool): Whether user-specific tools were used
+                - session_id (str): Session identifier
+                - retrieval_score (float): Average relevance score
+                - error (str): Error message if any
+        
+        Example:
+            ```python
+            result = agent.answer_question(
+                question="ما هي أنواع الإجازات؟",
+                session_id="user_123"
+            )
+            if not result.get("error"):
+                print(result["answer"])
+            ```
+        """
         if not self.agent_chain or not self.agent_chain.tools_chain:
             logger.error("Agent chain not available")
             return {
                 "answer": "Agent not properly initialized. Please check configuration.",
                 "sources": [],
-                "error": "Chain initialization failed"
+                "error": "chain_initialization_failed"
             }
         
         try:
+            # Set user metadata for tool access
             self.agent_chain.set_user_metadata(user_metadata)
             
+            # Process question through chain
             chain_input = {"input": question, "session_id": session_id}
-            
             result = self.agent_chain.invoke(chain_input)
             
-            if isinstance(result, dict):
-                answer = result.get("answer", "")
-                user_info_used = result.get("user_info_used", False)
-            else:
-                answer = str(result)
-                user_info_used = False
-            
-            source_docs = self.retriever._get_relevant_documents(question)
-            sources = self._format_source_documents(source_docs)
-            
+            # Format response
             return {
-                "answer": answer,
-                "sources": sources,
-                "user_info_used": user_info_used,
-                "session_id": session_id
+                "answer": result.get("answer", ""),
+                "sources": result.get("sources", []),
+                "user_info_used": result.get("user_info_used", False),
+                "session_id": session_id,
+                "retrieval_score": result.get("retrieval_score", 0.0),
+                "error": result.get("error")
             }
+        
         except Exception as e:
             logger.error(f"Error answering question: {str(e)}")
             return {
@@ -89,21 +146,6 @@ class AgentService:
                 "sources": [],
                 "error": str(e)
             }
-
-    def _format_source_documents(self, source_docs: List[Document]) -> List[Dict[str, Any]]:
-        """Format LangChain documents to source format."""
-        sources = []
-        for doc in source_docs:
-            content = doc.page_content
-            sources.append({
-                "id": doc.metadata.get('id', ''),
-                "content": content,
-                "document_name": doc.metadata.get('document_name', 'Unknown'),
-                "page_number": doc.metadata.get('page_number'),
-                "chunk_index": doc.metadata.get('chunk_index'),
-                "score": doc.metadata.get('score', 0.0)
-            })
-        return sources
     
     def clear_conversation(self, session_id: str) -> bool:
         """Clear conversation history for a specific session."""
