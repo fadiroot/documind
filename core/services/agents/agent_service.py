@@ -147,6 +147,48 @@ class AgentService:
                 "error": str(e)
             }
     
+    def stream_answer(
+        self,
+        question: str,
+        user_metadata: Optional[UserMetadata] = None,
+        session_id: Optional[str] = None,
+        category: Optional[str] = None,
+    ):
+        """
+        Stream answer chunks for a question.
+        
+        Args:
+            question: User's question in Arabic or English
+            user_metadata: User metadata for personalized answers (optional)
+            session_id: Session ID for conversation history (optional)
+            category: Document category filter (reserved for future use)
+        
+        Yields:
+            String chunks of the answer
+        """
+        if not self.agent_chain or not self.agent_chain.tools_chain:
+            yield "Agent not properly initialized. Please check configuration."
+            return
+        
+        try:
+            # Set user metadata for tool access
+            self.agent_chain.set_user_metadata(user_metadata)
+            
+            # Process question through chain to get full answer
+            chain_input = {"input": question, "session_id": session_id}
+            result = self.agent_chain.invoke(chain_input)
+            
+            # Stream the answer in chunks
+            answer = result.get("answer", "")
+            if answer:
+                # Simple chunking by words for streaming effect
+                words = answer.split()
+                for word in words:
+                    yield word + " "
+        except Exception as e:
+            logger.error(f"Error streaming answer: {str(e)}")
+            yield f"Error processing question: {str(e)}"
+    
     def clear_conversation(self, session_id: str) -> bool:
         """Clear conversation history for a specific session."""
         return self.conversation_memory.clear_session(session_id)

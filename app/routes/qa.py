@@ -26,7 +26,6 @@ async def ask_question(
         
         result = agent_service.answer_question(
             question=request.question,
-            context=request.context_ids,
             category=request.category,
             user_metadata=current_user,
             session_id=effective_session_id
