@@ -2,8 +2,7 @@
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
-from core.models.question import QuestionRequest, QuestionResponse
-from core.models.response import APIResponse
+from core.models.question import QuestionRequest
 from core.models.user import UserMetadata
 from core.services.agents.agent_service import AgentService
 from app.routes.auth import get_current_user
@@ -14,58 +13,38 @@ router = APIRouter()
 agent_service = AgentService()
 
 
-@router.post("/ask", response_model=APIResponse)
+@router.post("/ask")
 async def ask_question(
     request: QuestionRequest,
     session_id: Optional[str] = None,
     current_user: UserMetadata = Depends(get_current_user)
 ):
-    """Ask a question and get an answer using LangChain RAG chains."""
+    """Ask a question and get a streaming response (SSE).
+    
+    Event Types:
+    - status: Progress updates
+    - answer_start: Beginning of answer
+    - answer_chunk: Text chunks (stream to UI)
+    - answer_end: End of answer
+    - complete: Final metadata (sources, user_info_used, retrieval_score)
+    - error: Error messages
+    """
     try:
         effective_session_id = session_id or current_user.user_id
         
-        result = agent_service.answer_question(
-            question=request.question,
-            category=request.category,
-            user_metadata=current_user,
-            session_id=effective_session_id
-        )
-        
-        response = QuestionResponse(
-            answer=result.get("answer", ""),
-            sources=result.get("sources", []),
-            confidence=result.get("confidence"),
-            user_info_used=result.get("user_info_used", False)
-        )
-        
-        return APIResponse(
-            success=True,
-            message="Question answered successfully",
-            data=response.dict()
-        )
-    except Exception as e:
-        logger.error(f"Error processing question: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error processing question: {str(e)}"
-        )
-
-
-@router.post("/ask/stream")
-async def ask_question_stream(
-    request: QuestionRequest,
-    current_user: UserMetadata = Depends(get_current_user)
-):
-    """Ask a question with streaming response."""
-    try:
         def generate():
-            for chunk in agent_service.stream_answer(
-                question=request.question,
-                category=request.category,
-                user_metadata=current_user
-            ):
-                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
-            yield "data: [DONE]\n\n"
+            try:
+                for event in agent_service.stream(
+                    question=request.question,
+                    user=current_user,
+                    session_id=effective_session_id
+                ):
+                    yield f"data: {json.dumps(event)}\n\n"
+                
+                yield "data: [DONE]\n\n"
+            except Exception as e:
+                logger.error(f"Error in stream: {str(e)}", exc_info=True)
+                yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
         
         return StreamingResponse(
             generate(),
@@ -73,6 +52,7 @@ async def ask_question_stream(
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
             }
         )
     except Exception as e:
