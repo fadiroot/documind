@@ -16,4 +16,3 @@ class QuestionResponse(BaseModel):
     answer: str
     sources: List[dict]
     confidence: Optional[float] = None
-    user_info_used: Optional[bool] = False

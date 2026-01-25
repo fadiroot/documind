@@ -89,5 +89,7 @@ class PDFService:
             List of DocumentChunk objects with metadata
         """
         text = self.extract_text(pdf_bytes)
+        source_file_name = filename, 
         source_file = filename or "unknown"
         return self.chunker.chunk_document(text, source_file)
+        

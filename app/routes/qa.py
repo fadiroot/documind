@@ -26,7 +26,7 @@ async def ask_question(
     - answer_start: Beginning of answer
     - answer_chunk: Text chunks (stream to UI)
     - answer_end: End of answer
-    - complete: Final metadata (sources, user_info_used, retrieval_score)
+    - complete: Final metadata (sources, retrieval_score)
     - error: Error messages
     """
     try:

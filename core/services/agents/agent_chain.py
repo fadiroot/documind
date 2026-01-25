@@ -1,12 +1,11 @@
 """AgentChain orchestrates RAG pipeline with streaming."""
 from typing import Dict, Any, Optional, List
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import AzureChatOpenAI
 
 from core.services.retrieval.retrieval_service import RetrievalService
 from core.services.retrieval.retrieval_result import RetrievalResult
 from core.services.prompts.prompt_builder import PromptBuilder
-from core.services.tools.tool_executor import ToolExecutor
 from core.services.memory.conversation_memory import ConversationMemory
 from core.services.errors.error_handler import ErrorHandler
 from core.services.agents.question_router_agent import QuestionRouterAgent
@@ -28,14 +27,12 @@ class AgentChain:
         retrieval_service: RetrievalService,
         conversation_memory: ConversationMemory,
         prompt_builder: Optional[PromptBuilder] = None,
-        tool_executor: Optional[ToolExecutor] = None,
         min_retrieval_score: float = 0.3
     ):
         self.llm = llm
         self.retrieval_service = retrieval_service
         self.conversation_memory = conversation_memory
         self.prompt_builder = prompt_builder or PromptBuilder()
-        self.tool_executor = tool_executor or ToolExecutor()
         self.min_retrieval_score = min_retrieval_score
         self.user: Optional[UserMetadata] = None
         self.router = QuestionRouterAgent(llm) if llm else None
@@ -94,6 +91,11 @@ class AgentChain:
         
         messages = [SystemMessage(content=system), HumanMessage(content=user)]
         
+        # Add user information
+        user_info = self._format_user_info()
+        if user_info:
+            messages[0].content = f"{user_info}\n\n{messages[0].content}"
+        
         try:
             yield {"type": "answer_start"}
             full_answer = ""
@@ -110,7 +112,6 @@ class AgentChain:
             
             yield {
                 "type": "complete",
-                "user_info_used": False,
                 "sources": [],
                 "retrieval_score": 0.0
             }
@@ -134,7 +135,7 @@ class AgentChain:
                 yield {"type": "answer_start"}
                 yield {"type": "answer_chunk", "content": fallback}
                 yield {"type": "answer_end"}
-                yield {"type": "complete", "user_info_used": False, "sources": [], "error": "no_documents"}
+                yield {"type": "complete", "sources": [], "error": "no_documents"}
                 return
             
             yield {"type": "status", "content": "Generating answer..."}
@@ -150,14 +151,13 @@ class AgentChain:
                 HumanMessage(content=user_prompt)
             ]
             
-            user_info_used, full_answer = yield from self._generate(messages)
+            full_answer = yield from self._generate(messages)
             
             if full_answer:
                 self.conversation_memory.add_exchange(session_id, question, full_answer)
             
             yield {
                 "type": "complete",
-                "user_info_used": user_info_used,
                 "sources": self._build_sources(docs),
                 "retrieval_score": docs.get_average_score()
             }
@@ -168,57 +168,49 @@ class AgentChain:
             yield {"type": "error", "content": fallback, "error": str(e)}
     
     def _generate(self, messages: List):
-        """Generate answer with optional tool calls."""
-        user_info_used = False
+        """Generate answer with user data included in context."""
         full_answer = ""
         
-        if self.user:
-            from core.services.agents.agent_tools import create_user_info_tool
-            tool = create_user_info_tool(self.user)
-            llm_with_tools = self.llm.bind_tools([tool])
-            
-            yield {"type": "answer_start"}
-            final_message = None
-            
-            for chunk in llm_with_tools.stream(messages):
-                if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
-                    final_message = chunk
-                
-                content = self._extract(chunk)
-                if content:
-                    full_answer += content
-                    yield {"type": "answer_chunk", "content": content}
-            
-            if final_message and hasattr(final_message, 'tool_calls') and final_message.tool_calls:
-                result = self.tool_executor.execute(
-                    llm_response=final_message,
-                    user_metadata=self.user,
-                    llm=self.llm
-                )
-                user_info_used = result.success and len(result.tools_called) > 0
-                
-                messages.append(AIMessage(content=full_answer, tool_calls=final_message.tool_calls))
-                for i, (call, res) in enumerate(zip(final_message.tool_calls, result.results)):
-                    messages.append(ToolMessage(content=res, tool_call_id=call.get("id", f"call_{i}")))
-                
-                full_answer = ""
-                for chunk in self.llm.stream(messages):
-                    content = self._extract(chunk)
-                    if content:
-                        full_answer += content
-                        yield {"type": "answer_chunk", "content": content}
-            
-            yield {"type": "answer_end"}
-        else:
-            yield {"type": "answer_start"}
-            for chunk in self.llm.stream(messages):
-                content = self._extract(chunk)
-                if content:
-                    full_answer += content
-                    yield {"type": "answer_chunk", "content": content}
-            yield {"type": "answer_end"}
+        # Add user information to system prompt
+        user_info = self._format_user_info()
+        if user_info:
+            if messages and isinstance(messages[0], SystemMessage):
+                messages[0].content = f"{user_info}\n\n{messages[0].content}"
+            else:
+                messages.insert(0, SystemMessage(content=user_info))
         
-        return user_info_used, full_answer
+        yield {"type": "answer_start"}
+        for chunk in self.llm.stream(messages):
+            content = self._extract(chunk)
+            if content:
+                full_answer += content
+                yield {"type": "answer_chunk", "content": content}
+        yield {"type": "answer_end"}
+        
+        return full_answer
+    
+    def _format_user_info(self) -> str:
+        """Format user metadata as context string."""
+        if not self.user:
+            return ""
+        
+        user = self.user
+        info_parts = [
+            "User Information:",
+            f"- Full Name: {user.full_name}",
+            f"- Cadre: {user.cadre}",
+            f"- Current Rank: {user.current_rank or 'N/A'}",
+            f"- Years in Rank: {user.years_in_rank or 'N/A'}",
+            f"- Administration: {user.administration}"
+        ]
+        
+        if user.job_title:
+            info_parts.append(f"- Job Title: {user.job_title}")
+        
+        if user.expected_filter:
+            info_parts.append(f"- Expected Filter: {user.expected_filter}")
+        
+        return "\n".join(info_parts)
     
     def _extract(self, response: Any) -> str:
         """Extract text from LLM response."""

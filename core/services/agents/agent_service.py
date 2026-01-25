@@ -7,7 +7,6 @@ from core.services.retrieval.retrieval_service import RetrievalService
 from core.services.memory.conversation_memory import ConversationMemory
 from core.services.agents.agent_chain import AgentChain
 from core.services.prompts.prompt_builder import PromptBuilder
-from core.services.tools.tool_executor import ToolExecutor
 from core.models.user import UserMetadata
 from core.utils.logger import logger
 from app.config import settings
@@ -42,7 +41,6 @@ class AgentService:
                     enable_summarization=False
                 ),
                 prompt_builder=PromptBuilder(),
-                tool_executor=ToolExecutor(max_iterations=3),
                 min_retrieval_score=min_retrieval_score
             )
     

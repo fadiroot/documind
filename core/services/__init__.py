@@ -23,7 +23,7 @@ Usage:
     index_service.create_index()
 """
 # Agent services
-from core.services.agents import AgentService, create_user_info_tool
+from core.services.agents import AgentService
 
 # Retrieval services (internal use - not exported)
 from core.services.retrieval import EmbeddingService
@@ -49,5 +49,4 @@ __all__ = [
     "DocumentChunk",
     # Utilities
     "EmbeddingService",
-    "create_user_info_tool",
 ]
