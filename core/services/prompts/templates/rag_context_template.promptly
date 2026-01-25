@@ -1,0 +1,18 @@
+---
+name: DocuMind RAG Context Template
+description: Template for formatting document context in RAG prompts
+model:
+  api: chat
+  configuration:
+    type: azure_openai
+    azure_deployment: gpt-4o
+parameters:
+  temperature: 0.3
+  max_tokens: 4000
+---
+
+[Reference {index}]
+Document: {resource_path}
+{separator}
+{content}
+{separator}

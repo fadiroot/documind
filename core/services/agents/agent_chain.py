@@ -1,5 +1,6 @@
 """AgentChain orchestrates RAG pipeline with streaming."""
 from typing import Dict, Any, Optional, List
+from pathlib import Path
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import AzureChatOpenAI
 
@@ -36,6 +37,7 @@ class AgentChain:
         self.min_retrieval_score = min_retrieval_score
         self.user: Optional[UserMetadata] = None
         self.router = QuestionRouterAgent(llm) if llm else None
+        self._prompts_dir = Path(__file__).parent.parent / "prompts" / "templates"
     
     def set_user(self, user: Optional[UserMetadata]):
         """Set user for personalization."""
@@ -54,15 +56,15 @@ class AgentChain:
             yield {"type": "error", "content": "No question", "error": "empty"}
             return
         
-        language = self.prompt_builder.detect_language(question)
-        is_arabic = "arabic" in language.lower()
+        # Detect language only for router (still needed for router logic)
+        is_arabic = any('\u0600' <= char <= '\u06FF' for char in question)
         lang = "arabic" if is_arabic else "english"
         needs_docs = self._needs_documents(question, lang)
         
         if needs_docs:
             yield from self._answer_with_docs(question, lang, session_id)
         else:
-            yield from self._answer_general(question, lang, session_id)
+            yield from self._answer_general(question, session_id)
     
     def _needs_documents(self, question: str, lang: str) -> bool:
         """Check if question needs document retrieval."""
@@ -76,25 +78,45 @@ class AgentChain:
             logger.warning(f"Router error: {str(e)}")
             return True
     
-    def _answer_general(self, question: str, lang: str, session_id: Optional[str]):
+    def _load_prompt(self, filename: str) -> str:
+        """Load prompt text from .promptly file, extracting content after YAML frontmatter."""
+        prompt_path = self._prompts_dir / filename
+        try:
+            content = prompt_path.read_text(encoding="utf-8")
+            # Extract content after YAML frontmatter (after ---\n---\n)
+            if "---\n" in content:
+                parts = content.split("---\n", 2)
+                if len(parts) >= 3:
+                    return parts[2].strip()
+            return content.strip()
+        except Exception as e:
+            logger.warning(f"Failed to load prompt {filename}: {str(e)}")
+            return ""
+    
+    def _answer_general(self, question: str, session_id: Optional[str]):
         """Answer general questions without document retrieval."""
         yield {"type": "status", "content": "Processing..."}
         
         history = self.conversation_memory.get_summary(session_id)
         
-        if lang == "arabic":
-            system = "أنت مساعد ذكي متخصص في الوثائق القانونية والتنظيمية السعودية. كن ودوداً ومهذباً."
-            user = f"{history}\n\nالسؤال: {question}\n\nأجب بشكل طبيعي." if history and history != "No previous conversation." else f"السؤال: {question}"
+        # Load unified system prompt
+        system = self._load_prompt("general_system_prompt.promptly")
+        if not system:
+            system = """You are a helpful AI assistant for Saudi Arabian legal documents. Be friendly and polite.
+
+**Important Language Rules:**
+- Always respond in the SAME language as the user's question
+- If the question is in Arabic, respond in Arabic
+- If the question is in English, respond in English
+- Match the language style and formality of the question"""
+        
+        # Build user prompt
+        if history and history != "No previous conversation.":
+            user = f"{history}\n\nQuestion: {question}\n\nAnswer naturally."
         else:
-            system = "You are a helpful AI assistant for Saudi Arabian legal documents. Be friendly and polite."
-            user = f"{history}\n\nQuestion: {question}\n\nAnswer naturally." if history and history != "No previous conversation." else f"Question: {question}"
+            user = f"Question: {question}"
         
         messages = [SystemMessage(content=system), HumanMessage(content=user)]
-        
-        # Add user information
-        user_info = self._format_user_info()
-        if user_info:
-            messages[0].content = f"{user_info}\n\n{messages[0].content}"
         
         try:
             yield {"type": "answer_start"}
