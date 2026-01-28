@@ -1,24 +1,8 @@
-"""
-Arabic number parser utility for legal document processing.
-
-Handles conversion of Arabic ordinal numbers (written and numeric) to integers.
-Supports numbers from 1 to 99+ using rule-based parsing.
-"""
 import re
 from typing import Optional
 
 
 class ArabicNumberParser:
-    """
-    Rule-based parser for Arabic ordinal numbers.
-    
-    Supports:
-    - Numeric: "المادة 37" -> 37
-    - Simple ordinals (1-10): "المادة الأولى" -> 1
-    - Compound ordinals (11-99): "المادة السابعة والثلاثون" -> 37
-    """
-    
-    # Units (1-10) - both masculine and feminine forms
     UNITS = {
         'الأول': 1, 'الأولى': 1,
         'الثاني': 2, 'الثانية': 2,
@@ -32,7 +16,6 @@ class ArabicNumberParser:
         'العاشر': 10, 'العاشرة': 10,
     }
     
-    # Tens (10, 20, 30, ..., 90)
     TENS = {
         'عشر': 10, 'عشرة': 10,
         'عشرون': 20, 'عشرين': 20,
@@ -45,7 +28,6 @@ class ArabicNumberParser:
         'تسعون': 90, 'تسعين': 90,
     }
     
-    # Special case for 11-19 (compound with "عشر")
     COMPOUND_TENS_PREFIXES = {
         'أول': 1, 'أولى': 1,
         'ثاني': 2, 'ثانية': 2,
@@ -60,21 +42,10 @@ class ArabicNumberParser:
     
     @classmethod
     def parse_article_number(cls, text: str) -> Optional[str]:
-        """
-        Extract and parse article number from text.
-        
-        Args:
-            text: Text containing article reference (e.g., "المادة 37" or "المادة السابعة والثلاثون")
-        
-        Returns:
-            Article number as string, or None if not found
-        """
-        # First try numeric extraction
         numeric_match = re.search(r'المادة\s+(\d+)', text)
         if numeric_match:
             return numeric_match.group(1)
         
-        # Try to find Arabic ordinal pattern
         ordinal_match = re.search(
             r'المادة\s+([^\s]+(?:\s+و\s+[^\s]+)?)',
             text
@@ -89,32 +60,16 @@ class ArabicNumberParser:
     
     @classmethod
     def _parse_ordinal(cls, text: str) -> Optional[int]:
-        """
-        Parse Arabic ordinal text to integer.
-        
-        Args:
-            text: Arabic ordinal text (e.g., "السابعة والثلاثون")
-        
-        Returns:
-            Integer value or None
-        """
         text = text.strip()
         
-        # Check simple units (1-10)
         for ordinal, value in cls.UNITS.items():
             if ordinal in text:
-                # If it's just a simple unit, return it
                 if text == ordinal or text.startswith(ordinal):
                     return value
-        
-        # Check for compound numbers (11-99)
-        # Pattern: "السابعة والثلاثون" = 37 (7 + 30)
-        # Pattern: "الحادي عشر" = 11
         
         # Check for 11-19 pattern: "الحادي عشر", "الثاني عشر", etc.
         for prefix, unit_value in cls.COMPOUND_TENS_PREFIXES.items():
             if prefix in text and ('عشر' in text or 'عشرة' in text):
-                # Check if it's 11-19
                 if 'عشر' in text or 'عشرة' in text:
                     # Verify it's not 20+ (which would have "عشرون" or "عشرين")
                     if 'عشرون' not in text and 'عشرين' not in text:
@@ -128,14 +83,12 @@ class ArabicNumberParser:
                 unit_part = parts[0].strip()
                 tens_part = parts[1].strip()
                 
-                # Find unit value
                 unit_value = None
                 for ordinal, value in cls.UNITS.items():
                     if ordinal in unit_part:
                         unit_value = value
                         break
                 
-                # Find tens value
                 tens_value = None
                 for tens_word, value in cls.TENS.items():
                     if tens_word in tens_part:
@@ -145,10 +98,8 @@ class ArabicNumberParser:
                 if unit_value is not None and tens_value is not None:
                     return unit_value + tens_value
         
-        # Check for standalone tens (20, 30, 40, etc.)
         for tens_word, value in cls.TENS.items():
             if tens_word in text:
-                # Make sure it's not part of a compound
                 if 'و' not in text and 'وال' not in text:
                     return value
         
@@ -156,22 +107,10 @@ class ArabicNumberParser:
     
     @classmethod
     def extract_number_from_text(cls, text: str, max_length: int = 500) -> Optional[str]:
-        """
-        Extract any Arabic number (article, section, etc.) from text.
-        
-        Args:
-            text: Text to search
-            max_length: Maximum length of text to search (for performance)
-        
-        Returns:
-            Number as string, or None
-        """
-        # Try numeric first
         numeric_match = re.search(r'(\d+)', text[:max_length])
         if numeric_match:
             return numeric_match.group(1)
         
-        # Try Arabic ordinal
         ordinal_match = re.search(
             r'([^\s]+(?:\s+و\s+[^\s]+)?)',
             text[:max_length]

@@ -23,10 +23,13 @@ class ErrorHandler:
     def handle_llm_error(
         error: Exception,
         question: str,
-        language: str = "arabic"
+        language: Optional[str] = None
     ) -> str:
         """Handle LLM errors with fallback response."""
         logger.error(f"LLM error: {str(error)}")
+        # Default to a generic message that works for both languages
+        if language is None:
+            return "I encountered an error while processing your question. Please try again."
         return FallbackResponses.get_response("llm_error", language)
     
     @staticmethod
@@ -42,10 +45,13 @@ class ErrorHandler:
     @staticmethod
     def handle_no_documents(
         question: str,
-        language: str = "arabic"
+        language: Optional[str] = None
     ) -> str:
         """Handle case when no documents are retrieved."""
         logger.warning(f"No documents retrieved for question: {question[:100]}")
+        # Default to a generic message that works for both languages
+        if language is None:
+            return "I couldn't find relevant documents to answer your question. Please try rephrasing or asking a different question."
         return FallbackResponses.get_response("no_documents", language)
     
     @staticmethod

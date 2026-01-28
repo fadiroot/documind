@@ -46,7 +46,6 @@ class PromptBuilder:
             content = doc.page_content
             metadata = doc.metadata or {}
             resource_path = self._get_resource_path(metadata)
-            
             context_part = template.format(
                 index=i,
                 resource_path=resource_path,

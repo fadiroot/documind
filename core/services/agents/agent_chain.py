@@ -1,4 +1,5 @@
-"""AgentChain orchestrates RAG pipeline with streaming."""
+import json
+import re
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -12,16 +13,11 @@ from core.services.errors.error_handler import ErrorHandler
 from core.services.agents.question_router_agent import QuestionRouterAgent
 from core.services.utils.metadata_utils import build_resource_path
 from core.models.user import UserMetadata
+from core.models.answer import AnswerResponse, AnswerItem
 from core.utils.logger import logger
 
 
 class AgentChain:
-    """
-    RAG pipeline orchestrator with streaming.
-    
-    Flow: Question → Router → Retrieve → Generate → Stream
-    """
-    
     def __init__(
         self,
         llm: AzureChatOpenAI,
@@ -40,15 +36,9 @@ class AgentChain:
         self._prompts_dir = Path(__file__).parent.parent / "prompts" / "templates"
     
     def set_user(self, user: Optional[UserMetadata]):
-        """Set user for personalization."""
         self.user = user
     
     def stream(self, input_dict: Dict[str, Any]):
-        """
-        Stream answer generation (primary method).
-        
-        Yields: status, answer_start, answer_chunk, answer_end, complete, error
-        """
         question = input_dict.get("input", "")
         session_id = input_dict.get("session_id")
         
@@ -56,30 +46,25 @@ class AgentChain:
             yield {"type": "error", "content": "No question", "error": "empty"}
             return
         
-        # Detect language only for router (still needed for router logic)
-        is_arabic = any('\u0600' <= char <= '\u06FF' for char in question)
-        lang = "arabic" if is_arabic else "english"
-        needs_docs = self._needs_documents(question, lang)
+        needs_docs = self._needs_documents(question)
         
         if needs_docs:
-            yield from self._answer_with_docs(question, lang, session_id)
+            yield from self._answer_with_docs(question, session_id)
         else:
             yield from self._answer_general(question, session_id)
     
-    def _needs_documents(self, question: str, lang: str) -> bool:
-        """Check if question needs document retrieval."""
+    def _needs_documents(self, question: str) -> bool:
         if not self.router:
             return True
         
         try:
-            decision = self.router.should_retrieve_documents(question, lang)
+            decision = self.router.should_retrieve_documents(question)
             return decision.get("needs_retrieval", True)
         except Exception as e:
             logger.warning(f"Router error: {str(e)}")
             return True
     
     def _load_prompt(self, filename: str) -> str:
-        """Load prompt text from .promptly file, extracting content after YAML frontmatter."""
         prompt_path = self._prompts_dir / filename
         try:
             content = prompt_path.read_text(encoding="utf-8")
@@ -94,23 +79,11 @@ class AgentChain:
             return ""
     
     def _answer_general(self, question: str, session_id: Optional[str]):
-        """Answer general questions without document retrieval."""
         yield {"type": "status", "content": "Processing..."}
         
         history = self.conversation_memory.get_summary(session_id)
-        
-        # Load unified system prompt
         system = self._load_prompt("general_system_prompt.promptly")
-        if not system:
-            system = """You are a helpful AI assistant for Saudi Arabian legal documents. Be friendly and polite.
-
-**Important Language Rules:**
-- Always respond in the SAME language as the user's question
-- If the question is in Arabic, respond in Arabic
-- If the question is in English, respond in English
-- Match the language style and formality of the question"""
         
-        # Build user prompt
         if history and history != "No previous conversation.":
             user = f"{history}\n\nQuestion: {question}\n\nAnswer naturally."
         else:
@@ -141,8 +114,7 @@ class AgentChain:
             logger.error(f"General answer error: {str(e)}")
             yield {"type": "error", "content": str(e)}
     
-    def _answer_with_docs(self, question: str, lang: str, session_id: Optional[str]):
-        """Answer questions using retrieved documents (RAG)."""
+    def _answer_with_docs(self, question: str, session_id: Optional[str]):
         try:
             yield {"type": "status", "content": "Retrieving documents..."}
             docs = self.retrieval_service.retrieve(
@@ -153,7 +125,7 @@ class AgentChain:
             
             if not docs.has_results():
                 logger.warning("No documents found")
-                fallback = ErrorHandler.handle_no_documents(question, lang)
+                fallback = ErrorHandler.handle_no_documents(question)
                 yield {"type": "answer_start"}
                 yield {"type": "answer_chunk", "content": fallback}
                 yield {"type": "answer_end"}
@@ -173,27 +145,43 @@ class AgentChain:
                 HumanMessage(content=user_prompt)
             ]
             
-            full_answer = yield from self._generate(messages)
+            result = yield from self._generate(messages)
             
-            if full_answer:
-                self.conversation_memory.add_exchange(session_id, question, full_answer)
+            if result and result.get("content"):
+                self.conversation_memory.add_exchange(session_id, question, result["content"])
             
-            yield {
+            complete_data = {
                 "type": "complete",
                 "sources": self._build_sources(docs),
                 "retrieval_score": docs.get_average_score()
             }
+            
+            if result and result.get("structured"):
+                complete_data["structured_response"] = result["structured"]
+                complete_data["resources"] = result.get("resources", [])
+                
+                try:
+                    structured_data = result["structured"]
+                    if structured_data and "answers" in structured_data:
+                        answer_response = AnswerResponse(**structured_data)
+                        print("\n" + "="*80)
+                        print("AnswerResponse after streaming:")
+                        print("="*80)
+                        print(answer_response.model_dump_json(indent=2))
+                        print("="*80 + "\n")
+                except Exception as e:
+                    logger.warning(f"Failed to print AnswerResponse: {str(e)}")
+            
+            yield complete_data
         
         except Exception as e:
             logger.error(f"RAG error: {str(e)}", exc_info=True)
-            fallback = ErrorHandler.handle_llm_error(e, question, lang)
+            fallback = ErrorHandler.handle_llm_error(e, question)
             yield {"type": "error", "content": fallback, "error": str(e)}
     
     def _generate(self, messages: List):
-        """Generate answer with user data included in context."""
         full_answer = ""
         
-        # Add user information to system prompt
         user_info = self._format_user_info()
         if user_info:
             if messages and isinstance(messages[0], SystemMessage):
@@ -209,10 +197,60 @@ class AgentChain:
                 yield {"type": "answer_chunk", "content": content}
         yield {"type": "answer_end"}
         
-        return full_answer
+        parsed_response = self._parse_json_response(full_answer)
+        return parsed_response
+    
+    def _parse_json_response(self, raw_response: str) -> Dict[str, Any]:
+        try:
+            json_text = raw_response.strip()
+            
+            # Remove markdown code blocks if present
+            json_text = re.sub(r'^```(?:json)?\s*\n', '', json_text, flags=re.MULTILINE)
+            json_text = re.sub(r'\n```\s*$', '', json_text, flags=re.MULTILINE)
+            json_text = json_text.strip()
+            
+            data = json.loads(json_text)
+            
+            if isinstance(data, list):
+                answer_items = []
+                for item in data:
+                    if isinstance(item, dict) and "content" in item and "resource" in item:
+                        answer_items.append(AnswerItem(
+                            content=item["content"],
+                            resource=item["resource"]
+                        ))
+                
+                if answer_items:
+                    answer_response = AnswerResponse(answers=answer_items)
+                    return {
+                        "content": "\n\n".join([item.content for item in answer_items]),
+                        "resources": [item.resource for item in answer_items],
+                        "structured": answer_response.model_dump()
+                    }
+            
+            logger.warning("Failed to parse JSON response, using raw content")
+            return {
+                "content": raw_response,
+                "resources": [],
+                "structured": None
+            }
+            
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON parse error: {str(e)}, using raw content")
+            return {
+                "content": raw_response,
+                "resources": [],
+                "structured": None
+            }
+        except Exception as e:
+            logger.error(f"Error parsing response: {str(e)}")
+            return {
+                "content": raw_response,
+                "resources": [],
+                "structured": None
+            }
     
     def _format_user_info(self) -> str:
-        """Format user metadata as context string."""
         if not self.user:
             return ""
         
@@ -235,13 +273,11 @@ class AgentChain:
         return "\n".join(info_parts)
     
     def _extract(self, response: Any) -> str:
-        """Extract text from LLM response."""
         if hasattr(response, 'content'):
             return str(response.content) if response.content else ""
         return str(response)
     
     def _build_sources(self, docs: RetrievalResult) -> List[Dict[str, Any]]:
-        """Build source list from retrieval results."""
         sources = []
         for doc, score, meta in zip(docs.documents, docs.scores, docs.metadata):
             sources.append({

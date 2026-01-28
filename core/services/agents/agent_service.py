@@ -1,4 +1,3 @@
-"""Main service for question answering using RAG."""
 from typing import Dict, Any, Optional
 
 from langchain_openai import AzureChatOpenAI
@@ -13,20 +12,7 @@ from app.config import settings
 
 
 class AgentService:
-    """
-    RAG question answering service with streaming.
-    
-    Example:
-        service = AgentService()
-        
-        # Streaming
-        for event in service.stream("ما هي الإجازات؟", user, "session_123"):
-            if event["type"] == "answer_chunk":
-                print(event["content"], end="")
-    """
-    
     def __init__(self, min_retrieval_score: float = 0.3):
-        """Initialize service with Azure OpenAI."""
         self.llm = self._init_llm()
         self.agent_chain: Optional[AgentChain] = None
         if self.llm:
@@ -45,7 +31,6 @@ class AgentService:
             )
     
     def _init_llm(self) -> Optional[AzureChatOpenAI]:
-        """Initialize Azure OpenAI LLM."""
         if not settings.AZURE_OPENAI_API_KEY or not settings.AZURE_OPENAI_ENDPOINT:
             logger.error("Azure OpenAI not configured")
             return None
@@ -69,11 +54,6 @@ class AgentService:
         user: Optional[UserMetadata] = None,
         session_id: Optional[str] = None,
     ):
-        """
-        Stream answer in real-time (primary method).
-        
-        Yields: status, answer_start, answer_chunk, answer_end, complete, error
-        """
         if not self.agent_chain:
             yield {"type": "error", "content": "Service not initialized"}
             return
