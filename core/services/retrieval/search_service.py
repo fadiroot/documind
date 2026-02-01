@@ -1,4 +1,5 @@
 """Search service for querying Azure AI Search index."""
+import re
 from typing import List, Optional, Dict, Any
 from azure.search.documents.models import VectorizedQuery
 from azure.core.exceptions import ServiceRequestError, HttpResponseError
@@ -7,9 +8,18 @@ from core.utils.logger import logger
 from app.config import settings
 
 
+def _is_valid_odata_filter(filters: Optional[str]) -> bool:
+    """Return True only if filters looks like valid OData (field eq 'value', and, or, etc.)."""
+    if not filters or not filters.strip():
+        return False
+    s = filters.strip()
+    odata_ops = r"\b(eq|ne|gt|ge|lt|le|and|or|not)\b"
+    return bool(re.search(odata_ops, s, re.IGNORECASE))
+
+
 class SearchService:
     """Service for searching documents in Azure AI Search index."""
-    
+
     def __init__(self):
         self.search_client = get_search_client()
         self.index_name = settings.AZURE_AI_SEARCH_INDEX_NAME or settings.AZURE_SEARCH_INDEX_NAME
@@ -84,8 +94,10 @@ class SearchService:
                 ]
             }
             
-            if filters:
+            if filters and _is_valid_odata_filter(filters):
                 search_params["filter"] = filters
+            elif filters and not _is_valid_odata_filter(filters):
+                logger.warning("Ignoring invalid filter (must be OData, e.g. field eq 'value'): %r", filters[:80])
             
             results = self.search_client.search(**search_params)
             

@@ -3,15 +3,13 @@ from typing import Dict, Optional, Any
 from dataclasses import dataclass
 
 try:
-    from azure.ai.projects import AIProjectClient  # type: ignore
+    from azure.ai.agents import AgentsClient  # type: ignore
     from azure.identity import DefaultAzureCredential  # type: ignore
-    from azure.ai.agents.models import ListSortOrder  # type: ignore
-    AZURE_AI_PROJECTS_AVAILABLE = True
+    AZURE_AI_AGENTS_AVAILABLE = True
 except ImportError:
-    AIProjectClient = None  # type: ignore
+    AgentsClient = None  # type: ignore
     DefaultAzureCredential = None  # type: ignore
-    ListSortOrder = None  # type: ignore
-    AZURE_AI_PROJECTS_AVAILABLE = False
+    AZURE_AI_AGENTS_AVAILABLE = False
 
 from core.utils.logger import logger
 from app.config import settings
@@ -36,7 +34,7 @@ class ConversationMemory:
     - Sliding window: Keep only recent exchanges
     """
     
-    def __init__(self, max_recent_exchanges: int = 3, enable_summarization: bool = False):
+    def __init__(self, max_recent_exchanges: int = 3, enable_summarization: bool = True):
         self.azure_project_client: Optional[Any] = None
         self.azure_agent_id: Optional[str] = None
         self.session_thread_map: Dict[str, str] = {}
@@ -45,19 +43,24 @@ class ConversationMemory:
         self.max_recent_exchanges = max_recent_exchanges
         self.enable_summarization = enable_summarization
         
-        if AZURE_AI_PROJECTS_AVAILABLE and settings.AZURE_PROJECT_ENDPOINT and settings.AZURE_AI_AGENT_ID:
+        if AZURE_AI_AGENTS_AVAILABLE and settings.AZURE_PROJECT_ENDPOINT and settings.AZURE_AI_AGENT_ID:
             try:
                 credential = DefaultAzureCredential()  # type: ignore
-                self.azure_project_client = AIProjectClient(  # type: ignore
+                client = AgentsClient(  # type: ignore
                     credential=credential,
                     endpoint=settings.AZURE_PROJECT_ENDPOINT
                 )
-                self.azure_agent_id = settings.AZURE_AI_AGENT_ID
+                if hasattr(client, "threads"):
+                    self.azure_project_client = client
+                    self.azure_agent_id = settings.AZURE_AI_AGENT_ID
+                else:
+                    logger.warning("Azure AI Agents threads API not available (SDK mismatch). Using in-memory only.")
+                    self.azure_project_client = None
             except Exception as e:
                 logger.warning(f"Failed to initialize Azure AI Agents: {str(e)}. Using in-memory fallback.")
                 self.azure_project_client = None
-        elif not AZURE_AI_PROJECTS_AVAILABLE:
-            logger.warning("Azure AI Projects package not available")
+        elif not AZURE_AI_AGENTS_AVAILABLE:
+            logger.warning("Azure AI Agents package not available")
     
     def get_or_create_thread(self, session_id: Optional[str]) -> Optional[str]:
         """Get or create Azure AI Agents thread for a session."""
@@ -67,8 +70,7 @@ class ConversationMemory:
         try:
             if session_id in self.session_thread_map:
                 return self.session_thread_map[session_id]
-            
-            thread = self.azure_project_client.agents.threads.create()
+            thread = self.azure_project_client.threads.create({})
             self.session_thread_map[session_id] = thread.id
             return thread.id
         except Exception as e:
@@ -84,22 +86,18 @@ class ConversationMemory:
         """
         if not session_id:
             return None
-        
-        # Check if we have a summary
+
         if session_id in self.summaries:
             summary_obj = self.summaries[session_id]
             if summary_obj.summary:
                 return summary_obj.summary
-        
-        # Build summary from recent exchanges
+
         recent = self._get_recent_exchanges(session_id, self.max_recent_exchanges)
         if not recent:
             return None
-        
-        # Extract questions from recent exchanges (stored as {"role": "user", "content": question})
+
         questions = [msg.get('content', '') for msg in recent if msg.get('role') == 'user']
         if questions:
-            # Return last 2 questions as summary
             last_questions = questions[-2:] if len(questions) >= 2 else questions
             summary = f"Previous questions: {'; '.join(last_questions)}"
             return summary
@@ -122,46 +120,41 @@ class ConversationMemory:
         """
         if not session_id:
             return
-        
-        # Save to Azure thread if available
+
         thread_id = self.get_or_create_thread(session_id)
         if thread_id and self.azure_project_client:
             try:
-                self.azure_project_client.agents.messages.create(
+                self.azure_project_client.messages.create(
                     thread_id=thread_id,
                     role="user",
                     content=question
                 )
-                self.azure_project_client.agents.messages.create(
+                self.azure_project_client.messages.create(
                     thread_id=thread_id,
                     role="assistant",
                     content=answer
                 )
             except Exception as e:
                 logger.warning(f"Error saving to Azure thread: {str(e)}, using in-memory only")
-        
-        # Save to in-memory (always, even if Azure fails)
+
         if session_id not in self.in_memory_history:
             self.in_memory_history[session_id] = []
         
         self.in_memory_history[session_id].append({"role": "user", "content": question})
         self.in_memory_history[session_id].append({"role": "assistant", "content": answer})
-        
-        # Keep only recent exchanges (sliding window)
-        max_messages = self.max_recent_exchanges * 2  # Each exchange = 2 messages (user + assistant)
+
+        max_messages = self.max_recent_exchanges * 2
         if len(self.in_memory_history[session_id]) > max_messages:
             self.in_memory_history[session_id] = self.in_memory_history[session_id][-max_messages:]
-        
-        # Update summary
+
         self._update_summary(session_id)
-    
+
     def _get_recent_exchanges(self, session_id: str, count: int) -> list[Dict[str, str]]:
         """Get recent exchanges from memory."""
         if session_id not in self.in_memory_history:
             return []
         
         history = self.in_memory_history[session_id]
-        # Get last 'count' exchanges (each exchange = 2 messages: user + assistant)
         num_messages = count * 2
         return history[-num_messages:] if len(history) > num_messages else history
     
@@ -184,11 +177,9 @@ class ConversationMemory:
                 questions.append(content)
             elif role == "assistant":
                 answers.append(content)
-        
-        # Build summary from recent questions
+
         summary_text = ""
         if questions:
-            # Get last 2 questions, truncate if too long
             recent_questions = questions[-2:] if len(questions) >= 2 else questions
             question_summaries = []
             for q in recent_questions:
@@ -222,8 +213,7 @@ class ConversationMemory:
             cleared = True
         
         return cleared
-    
-    # Legacy method for backward compatibility
+
     def get_chat_history(self, thread_id: Optional[str], session_id: Optional[str] = None) -> str:
         """Legacy method: returns summary instead of full history."""
         summary = self.get_summary(session_id)

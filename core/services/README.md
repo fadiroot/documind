@@ -13,30 +13,32 @@ Main question-answering services using RAG (Retrieval-Augmented Generation).
 **Purpose**: Main entry point for question answering with conversation management.
 
 **Key Features**:
-- RAG-based question answering with citations
-- Conversation memory management
-- User-specific tool execution
-- Automatic language detection (Arabic/English)
+- RAG-based question answering via LangChain agent
+- Conversation memory with history passed to agent
+- Streaming responses
+- Optional Azure thread persistence
 
 **Usage**:
 ```python
 from core.services import AgentService
 
 agent = AgentService(min_retrieval_score=0.3)
-result = agent.answer_question(
+for event in agent.stream(
     question="ما هي أنواع الإجازات المتاحة؟",
-    user_metadata=user_metadata,
+    user=user_metadata,
     session_id="user_123"
-)
-
-print(result["answer"])  # AI-generated answer with citations
-print(result["sources"])  # Source documents with metadata
+):
+    if event["type"] == "answer_chunk":
+        print(event["content"], end="")
+    elif event["type"] == "complete":
+        break
 ```
 
 **Internal Components**:
-- `AgentChain`: Orchestrates retrieval → prompt → LLM pipeline
-- `QuestionRouterAgent`: Determines if document retrieval is needed
-- `agent_tools.py`: User-specific tool definitions
+- `AgentChain`: Streams from LangChain agent, injects conversation history
+- `agent.py`: `create_documind_agent()` – LangChain agent with `retrieve_tool`
+- `azure_client.py`: Azure OpenAI LLM factory (`get_azure_llm`)
+- `RetrievalService.create_retrieve_tool`: Document retrieval tool for the agent
 
 ---
 
@@ -130,13 +132,14 @@ success = storage.upload_documents(documents)
 Document search and embedding generation (internal use only).
 
 #### `RetrievalService`
-**Purpose**: Retrieve relevant documents with quality controls.
+**Purpose**: Retrieve relevant documents with quality controls. Exposes `create_retrieve_tool()` for LangChain agent integration.
 
 **Features**:
 - Vector similarity search
 - Score thresholding
 - Context length management
 - Automatic threshold relaxation
+- `create_retrieve_tool(retrieval_service)`: Returns a LangChain `@tool` for document retrieval
 
 #### `EmbeddingService`
 **Purpose**: Generate OpenAI embeddings for text.
@@ -149,13 +152,11 @@ Document search and embedding generation (internal use only).
 ### 5. **Supporting Services**
 
 #### Memory (`memory/`)
-- `ConversationMemory`: Manage conversation history and summaries
+- `ConversationMemory`: In-memory history (sliding window) and optional Azure AI Agents thread persistence
 
 #### Prompts (`prompts/`)
 - `PromptBuilder`: Format context and build prompts for LLM
-
-#### Tools (`tools/`)
-- `ToolExecutor`: Execute LangChain tools (e.g., user info retrieval)
+- `templates/system_prompt.promptly`: System prompt for LangChain agent (retrieval rules)
 
 #### Errors (`errors/`)
 - `ErrorHandler`: Centralized error handling
@@ -217,16 +218,15 @@ Every service includes:
 
 ```
 AgentService
-├── RetrievalService
-│   ├── EmbeddingService (OpenAI)
-│   └── SearchService (Azure AI Search)
-├── ConversationMemory
-├── PromptBuilder
-│   └── metadata_utils (shared)
-├── ToolExecutor
-└── AgentChain
-    └── QuestionRouterAgent
-
+├── AgentChain
+│   ├── create_documind_agent (agent.py)
+│   │   ├── get_azure_llm (azure_client)
+│   │   ├── RetrievalService
+│   │   │   ├── EmbeddingService (OpenAI)
+│   │   │   └── SearchService (Azure AI Search)
+│   │   └── create_retrieve_tool (retrieve_tool)
+│   └── ConversationMemory (history injected into agent)
+│
 PDFService
 ├── DocumentChunker
 │   ├── ArabicNumberParser
@@ -258,6 +258,10 @@ AZURE_OPENAI_ENDPOINT = "https://..."
 AZURE_OPENAI_API_KEY = "..."
 AZURE_OPENAI_DEPLOYMENT_NAME = "gpt-4o"
 AZURE_OPENAI_EMBEDDING_DEPLOYMENT = "text-embedding-3-large"
+
+# Azure AI Agents (optional, for thread persistence)
+AZURE_PROJECT_ENDPOINT = "https://..."
+AZURE_AI_AGENT_ID = "..."
 ```
 
 ---
@@ -267,11 +271,11 @@ AZURE_OPENAI_EMBEDDING_DEPLOYMENT = "text-embedding-3-large"
 ### Unit Tests
 Each service should have unit tests:
 ```python
-def test_agent_service_answer_question():
+def test_agent_service_stream():
     agent = AgentService()
-    result = agent.answer_question("test question")
-    assert "answer" in result
-    assert isinstance(result["sources"], list)
+    events = list(agent.stream("test question", session_id="test_123"))
+    answer_chunks = [e["content"] for e in events if e.get("type") == "answer_chunk"]
+    assert any(answer_chunks) or any(e.get("type") == "complete" for e in events)
 ```
 
 ### Integration Tests
@@ -292,8 +296,8 @@ def test_end_to_end_pipeline():
     
     # 4. Query
     agent = AgentService()
-    result = agent.answer_question("test")
-    assert result["answer"]
+    events = list(agent.stream("test", session_id="test_123"))
+    assert any(e.get("type") == "complete" or e.get("type") == "answer_chunk" for e in events)
 ```
 
 ---
@@ -367,9 +371,10 @@ from core.services import AzureAISearchRetriever, AgentChain
 **New** (recommended):
 ```python
 from core.services import AgentService
-# Simple, clean API
 agent = AgentService()
-result = agent.answer_question(question)
+for event in agent.stream(question=question, session_id=session_id):
+    if event["type"] == "answer_chunk":
+        print(event["content"], end="")
 ```
 
 ---
@@ -384,5 +389,5 @@ For issues or questions:
 
 ---
 
-**Last Updated**: January 2026  
-**Version**: 2.0 (Production-Ready Refactoring)
+**Last Updated**: February 2026  
+**Version**: 2.1 (LangChain agent with conversation history)

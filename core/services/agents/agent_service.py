@@ -2,10 +2,8 @@ from typing import Dict, Any, Optional
 
 from langchain_openai import AzureChatOpenAI
 
-from core.services.retrieval.retrieval_service import RetrievalService
 from core.services.memory.conversation_memory import ConversationMemory
 from core.services.agents.agent_chain import AgentChain
-from core.services.prompts.prompt_builder import PromptBuilder
 from core.models.user import UserMetadata
 from core.utils.logger import logger
 from app.config import settings
@@ -17,16 +15,10 @@ class AgentService:
         self.agent_chain: Optional[AgentChain] = None
         if self.llm:
             self.agent_chain = AgentChain(
-                llm=self.llm, # type: ignore
-                retrieval_service=RetrievalService(
-                    min_score_threshold=min_retrieval_score,
-                    enable_reranking=False
-                ),
                 conversation_memory=ConversationMemory(
                     max_recent_exchanges=3,
                     enable_summarization=False
                 ),
-                prompt_builder=PromptBuilder(),
                 min_retrieval_score=min_retrieval_score
             )
     
